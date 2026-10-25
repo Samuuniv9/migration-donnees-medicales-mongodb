@@ -1,0 +1,68 @@
+# Déploiement de la migration : 2 conteneurs, 1 réseau, des volumes.
+# Lancement : docker compose up --build
+name: p5-migration-mongodb
+
+services:
+  # --- Service 1 : la base MongoDB -------------------------------------------
+  mongodb:
+    image: mongo:7.0                      # image officielle MongoDB
+    container_name: p5_mongodb
+    restart: unless-stopped
+    environment:
+      # Compte super-administrateur, créé au premier démarrage.
+      MONGO_INITDB_ROOT_USERNAME: ${MONGO_ROOT_USER}
+      MONGO_INITDB_ROOT_PASSWORD: ${MONGO_ROOT_PASSWORD}
+      MONGO_INITDB_DATABASE: healthcare
+      # Comptes métier, créés par docker/mongo-init/01_create_users.js
+      MONGO_ADMIN_USER: ${MONGO_ADMIN_USER}
+      MONGO_ADMIN_PASSWORD: ${MONGO_ADMIN_PASSWORD}
+      MONGO_APP_USER: ${MONGO_APP_USER}
+      MONGO_APP_PASSWORD: ${MONGO_APP_PASSWORD}
+      MONGO_ANALYST_USER: ${MONGO_ANALYST_USER}
+      MONGO_ANALYST_PASSWORD: ${MONGO_ANALYST_PASSWORD}
+    ports:
+      - "27017:27017"                     # accès depuis l'ordinateur (mongosh, Compass)
+    volumes:
+      - mongo_data:/data/db               # VOLUME de la base : les données survivent au conteneur
+      - ./docker/mongo-init:/docker-entrypoint-initdb.d:ro   # script de création des comptes
+    networks:
+      - healthcare_net
+    healthcheck:                          # "MongoDB est-il prêt ?" toutes les 10 s
+      test: ["CMD", "mongosh", "--quiet", "--eval", "db.adminCommand('ping').ok"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 20s
+
+  # --- Service 2 : le script de migration ------------------------------------
+  migration:
+    build: .                              # image construite à partir du Dockerfile
+    container_name: p5_migration
+    depends_on:
+      mongodb:
+        condition: service_healthy        # attend que MongoDB soit prêt
+    environment:
+      MONGO_HOST: mongodb                 # nom du service = adresse sur le réseau Docker
+      MONGO_PORT: "27017"
+      MONGO_DB: healthcare
+      MONGO_COLLECTION: admissions
+      MONGO_APP_USER: ${MONGO_APP_USER}
+      MONGO_APP_PASSWORD: ${MONGO_APP_PASSWORD}
+      CSV_PATH: /data/csv/healthcare_dataset.csv
+      REPORT_DIR: /app/reports
+      DEDUPLICATE: ${DEDUPLICATE:-false}  # "true" seulement si le client valide
+    volumes:
+      - ./data:/data/csv:ro               # VOLUME du CSV, en lecture seule
+      - ./reports:/app/reports            # le rapport de migration revient sur l'ordinateur
+    networks:
+      - healthcare_net
+    restart: "no"                         # tâche ponctuelle : elle s'arrête une fois finie
+
+volumes:
+  mongo_data:
+    name: p5_mongo_data
+
+networks:
+  healthcare_net:
+    name: p5_healthcare_net
+    driver: bridge
