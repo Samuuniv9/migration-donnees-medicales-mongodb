@@ -1,0 +1,13 @@
+# Secrets
+.env
+# Données : le CSV est fourni par le client, il n'est pas versionné
+data/*.csv
+# Résultats d'exécution
+reports/*.json
+reports/*.jsonl
+reports/*.txt
+# Python
+__pycache__/
+*.pyc
+.pytest_cache/
+.venv/
