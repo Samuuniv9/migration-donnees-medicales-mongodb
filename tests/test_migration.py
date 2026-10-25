@@ -45,3 +45,19 @@ def test_crud():
     assert crud_demo.delete(collection, doc_id) == 1
     assert crud_demo.read(collection, doc_id) is None
 
+
+def test_export_complet(csv_file, tmp_path, monkeypatch):
+    """L'export ressort autant de documents qu'il y en a en base."""
+    from src import export_data
+
+    monkeypatch.setattr(config, "CSV_PATH", csv_file)
+    monkeypatch.setattr(config, "REPORT_DIR", str(tmp_path))
+    client = mongomock.MongoClient()
+    migrate.run(client=client, use_validator=False)
+
+    result = export_data.run(client=client)
+
+    assert result["statut"] == "SUCCES"
+    assert result["documents_exportes"] == 3
+    lines = (tmp_path / "export_admissions.jsonl").read_text(encoding="utf-8").splitlines()
+    assert len(lines) == 3 and '"$date"' in lines[0]
