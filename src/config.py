@@ -28,6 +28,12 @@ REPORT_DIR = os.getenv("REPORT_DIR", "reports")
 # seulement si le client valide la suppression des lignes identiques.
 DEDUPLICATE = os.getenv("DEDUPLICATE", "false").lower() == "true"
 
+# Mode de chargement : "ajout" (par défaut, n'écrase jamais l'existant)
+# ou "remplacement" (collection temporaire puis remplacement en une opération).
+MIGRATION_MODE = os.getenv("MIGRATION_MODE", "ajout").lower()
+if MIGRATION_MODE not in ("ajout", "remplacement"):
+    raise ValueError(f"MIGRATION_MODE inconnu : {MIGRATION_MODE} (attendu : ajout ou remplacement)")
+
 # Nombre de documents envoyés à MongoDB en une seule fois.
 BATCH_SIZE = int(os.getenv("BATCH_SIZE", "5000"))
 
