@@ -87,20 +87,37 @@ def row_to_document(row: dict) -> dict:
     }
 
 
+def _normalise(value) -> str:
+    """
+    Écrit une valeur toujours de la même façon, quel que soit le format du fichier :
+    montants arrondis au centime (pour l'identification seulement : la valeur
+    stockée en base reste intacte), dates au format AAAA-MM-JJ,
+    textes sans espaces autour. Ainsi, un fichier réexporté (Excel, pandas…)
+    donne les mêmes identifiants pour les mêmes données.
+    """
+    if isinstance(value, float):
+        return f"{value:.2f}"
+    if isinstance(value, pd.Timestamp):
+        return value.strftime("%Y-%m-%d")
+    return str(value).strip()
+
+
 def stable_ids(df: pd.DataFrame) -> list[str]:
     """
     Calcule un identifiant stable pour chaque ligne : une empreinte (SHA-256)
-    de toutes ses valeurs, suivie d'un numéro d'occurrence.
+    de toutes ses valeurs normalisées, suivie d'un numéro d'occurrence.
 
-    - La même ligne donne toujours le même identifiant : relancer la migration,
-      ou recevoir un fichier qui contient d'anciennes lignes, n'ajoute rien en double.
+    - La même admission donne toujours le même identifiant : relancer la
+      migration, ou recevoir un fichier qui contient d'anciennes lignes,
+      n'ajoute rien en double.
     - Deux lignes strictement identiques dans le fichier (doublons) reçoivent
       -1 et -2 : elles sont toutes les deux conservées (migration fidèle).
     """
     vus: dict[str, int] = {}
     ids = []
-    for values in df[EXPECTED_COLUMNS].astype(str).itertuples(index=False):
-        empreinte = hashlib.sha256("|".join(values).encode("utf-8")).hexdigest()[:24]
+    for row in df[EXPECTED_COLUMNS].itertuples(index=False):
+        texte = "|".join(_normalise(v) for v in row)
+        empreinte = hashlib.sha256(texte.encode("utf-8")).hexdigest()[:24]
         vus[empreinte] = vus.get(empreinte, 0) + 1
         ids.append(f"{empreinte}-{vus[empreinte]}")
     return ids
