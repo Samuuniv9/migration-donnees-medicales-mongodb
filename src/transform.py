@@ -7,6 +7,8 @@ qui correspondent aux usages : le patient, l'admission, le dossier médical,
 la facturation.
 """
 
+import hashlib
+
 import pandas as pd
 
 from src.config import EXPECTED_COLUMNS
@@ -85,6 +87,28 @@ def row_to_document(row: dict) -> dict:
     }
 
 
+def stable_ids(df: pd.DataFrame) -> list[str]:
+    """
+    Calcule un identifiant stable pour chaque ligne : une empreinte (SHA-256)
+    de toutes ses valeurs, suivie d'un numéro d'occurrence.
+
+    - La même ligne donne toujours le même identifiant : relancer la migration,
+      ou recevoir un fichier qui contient d'anciennes lignes, n'ajoute rien en double.
+    - Deux lignes strictement identiques dans le fichier (doublons) reçoivent
+      -1 et -2 : elles sont toutes les deux conservées (migration fidèle).
+    """
+    vus: dict[str, int] = {}
+    ids = []
+    for values in df[EXPECTED_COLUMNS].astype(str).itertuples(index=False):
+        empreinte = hashlib.sha256("|".join(values).encode("utf-8")).hexdigest()[:24]
+        vus[empreinte] = vus.get(empreinte, 0) + 1
+        ids.append(f"{empreinte}-{vus[empreinte]}")
+    return ids
+
+
 def to_documents(df: pd.DataFrame) -> list[dict]:
-    """Transforme toutes les lignes en documents."""
-    return [row_to_document(r) for r in df.to_dict(orient="records")]
+    """Transforme toutes les lignes en documents, chacun avec son identifiant stable."""
+    documents = []
+    for _id, row in zip(stable_ids(df), df.to_dict(orient="records")):
+        documents.append({"_id": _id, **row_to_document(row)})
+    return documents

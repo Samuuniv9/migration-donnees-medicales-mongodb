@@ -51,6 +51,7 @@ services:
       CSV_PATH: /data/csv/healthcare_dataset.csv
       REPORT_DIR: /app/reports
       DEDUPLICATE: ${DEDUPLICATE:-false}  # "true" seulement si le client valide
+      MIGRATION_MODE: ${MIGRATION_MODE:-ajout}  # "ajout" (n'écrase rien) ou "remplacement"
     volumes:
       - ./data:/data/csv:ro               # VOLUME du CSV, en lecture seule
       - ./reports:/app/reports            # le rapport de migration revient sur l'ordinateur

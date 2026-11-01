@@ -12,11 +12,12 @@ Un client de DataSoluTech gère les admissions de ses patients dans un fichier C
 2. [Contenu du dépôt](#2-contenu-du-dépôt)
 3. [Déployer pas à pas](#3-déployer-pas-à-pas)
 4. [Logique de la migration](#4-logique-de-la-migration)
-5. [Schéma de la base de données](#5-schéma-de-la-base-de-données)
-6. [Authentification et rôles utilisateurs](#6-authentification-et-rôles-utilisateurs)
-7. [Tests](#7-tests)
-8. [Architecture Docker](#8-architecture-docker)
-9. [Choix techniques](#9-choix-techniques)
+5. [Sécurité du chargement](#5-sécurité-du-chargement)
+6. [Schéma de la base de données](#6-schéma-de-la-base-de-données)
+7. [Authentification et rôles utilisateurs](#7-authentification-et-rôles-utilisateurs)
+8. [Tests](#8-tests)
+9. [Architecture Docker](#9-architecture-docker)
+10. [Choix techniques](#10-choix-techniques)
 
 ---
 
@@ -25,6 +26,8 @@ Un client de DataSoluTech gère les admissions de ses patients dans un fichier C
 | Entrée | Traitement | Sortie |
 |---|---|---|
 | `healthcare_dataset.csv` : 55 500 admissions, 15 colonnes | contrôle → typage → transformation → chargement → contrôle | base `healthcare`, collection `admissions` : 55 500 documents + rapport `reports/rapport_migration.json` |
+
+La migration est **sûre** : elle n'écrase jamais des données existantes. Une relance, une interruption ou l'arrivée d'un nouveau fichier ne fait ni perte ni doublon (voir [§5](#5-sécurité-du-chargement)).
 
 La migration est **fidèle** : aucune ligne n'est supprimée et aucune valeur n'est modifiée. Seuls les types sont convertis. Les anomalies détectées (doublons, montants négatifs, casse des noms) sont **signalées** dans le rapport ; les corriger est une décision du client.
 
@@ -47,7 +50,7 @@ Le programme s'arrête et le signale si les données ne sont pas fiables (colonn
 │   ├── migrate.py              # script principal
 │   ├── crud_demo.py            # démonstration Create / Read / Update / Delete
 │   └── export_data.py          # export de toutes les données (JSON)
-├── tests/                      # 18 tests automatisés (pytest)
+├── tests/                      # 23 tests automatisés (pytest)
 ├── docs/                       # schémas (base, architecture, rôles, pipeline)
 ├── data/                       # y déposer le CSV (non versionné)
 └── reports/                    # le rapport de migration y est écrit
@@ -139,9 +142,9 @@ python -m pytest                   # les tests n'ont pas besoin de MongoDB
 | 1. Lire | `pandas` lit le CSV ; arrêt si une des 15 colonnes manque | Ne jamais migrer un fichier incomplet |
 | 2. Contrôler avant | valeurs manquantes, doublons, valeurs hors liste, dates, âges | Savoir ce qu'on migre ; arrêt si une anomalie bloque |
 | 3. Typer et signaler | dates converties en vrai type date ; doublons, montants négatifs et casse des noms comptés dans le rapport | Bien typer sans modifier les valeurs du client |
-| 4. Préparer | collection recréée avec un **validateur de schéma** et **3 index** | MongoDB refuse un document mal typé ; recherches rapides |
-| 5. Charger | insertion par lots de 5 000 documents | Moins d'allers-retours avec la base |
-| 6. Contrôler après | nombre de documents, champs présents, types BSON, index | Prouver que rien n'a été perdu ni déformé |
+| 4. Préparer | collection créée si elle n'existe pas, avec un **validateur de schéma** et **3 index** ; chaque document reçoit un **identifiant stable** | MongoDB refuse un document mal typé ; recherches rapides ; pas de doublon à la relance |
+| 5. Charger | insertion par lots de 5 000 ; un document déjà présent est ignoré, jamais écrasé | Rien n'est perdu, rien n'est doublé |
+| 6. Contrôler après | chaque document du fichier est en base (par son identifiant), champs présents, types BSON, index | Prouver que rien n'a été perdu ni déformé |
 
 **Migration fidèle : ce qui est fait et pourquoi**
 
@@ -154,20 +157,38 @@ L'énoncé demande de **tester** l'intégrité (doublons, valeurs manquantes, ty
 | Casse irrégulière des noms (« Bobby JacksOn ») | 55 467 | **signalée, conservée** | Modifier un nom, c'est modifier une donnée du client |
 
 - **Typage** : seule transformation appliquée, car demandée par l'énoncé. Les dates deviennent de vraies dates ; la forme change, pas le contenu.
-- **Relance** : chaque exécution recrée la collection. Relancer le script donne toujours le même résultat, sans doublons ajoutés.
 - **Dédoublonnage sur validation du client** : mettre `DEDUPLICATE=true` dans `.env`, puis `docker compose down -v` et `docker compose up --build`. Résultat : 54 966 documents.
 
-## 5. Schéma de la base de données
+## 5. Sécurité du chargement
+
+Le script **ne supprime jamais la collection avant de charger**. Il propose deux modes, choisis avec `MIGRATION_MODE` dans `.env` :
+
+| Mode | Fonctionnement | Interruption en plein chargement | Nouveau fichier |
+|---|---|---|---|
+| **`ajout`** (par défaut) | Chaque ligne reçoit un **identifiant stable** (empreinte SHA-256 de ses valeurs + n° d'occurrence). Un document déjà présent est ignoré, jamais écrasé. | Les documents déjà chargés restent ; **relancer termine le travail**, sans doublon. | Les nouvelles admissions sont **ajoutées**, les anciennes **conservées**. |
+| **`remplacement`** | Chargement dans `admissions_temporaire`, contrôle, puis **remplacement en une seule opération** (renommage). | La collection `admissions` n'a **pas été touchée** : l'ancienne version reste intacte. | La collection est remplacée par le contenu du nouveau fichier. |
+
+Pourquoi l'identifiant inclut un numéro d'occurrence : deux lignes strictement identiques du fichier (les 534 doublons) reçoivent `-1` et `-2`. Elles sont toutes les deux conservées, conformément à la migration fidèle.
+
+Le compte `app_migration` (rôle `readWrite`) a les droits nécessaires : insérer, créer et renommer une collection dans sa base. Aucun droit supplémentaire n'est donné.
+
+Exemples :
+```bash
+docker compose up --build                                   # mode ajout (par défaut)
+docker compose run --rm -e MIGRATION_MODE=remplacement migration   # mode remplacement
+```
+
+## 6. Schéma de la base de données
 
 ![Schéma de la base de données](docs/schema_base_donnees.png)
 
-- **Base** `healthcare` → **collection** `admissions` → **un document par admission**.
+- **Base** `healthcare` → **collection** `admissions` → **un document par admission**, identifié par son **identifiant stable** (`_id`).
 - Chaque document regroupe les 15 colonnes du CSV en **4 sous-documents** qui correspondent aux usages : `patient`, `admission`, `medical`, `billing`.
 
 Exemple de document :
 ```json
 {
-  "_id": "ObjectId('...')",
+  "_id": "3f9c2a…-1",
   "patient":   { "name": "Bobby JacksOn", "age": 30, "gender": "Male", "blood_type": "B-" },
   "admission": { "date_of_admission": "ISODate('2024-01-31')", "discharge_date": "ISODate('2024-02-02')",
                  "admission_type": "Urgent", "hospital": "Sons and Miller",
@@ -191,7 +212,7 @@ Exemple de document :
 - **Collection** : un ensemble de documents, l'équivalent d'une table, sans schéma imposé (ici, un validateur en ajoute un).
 - **Base de données** : un ensemble de collections, avec ses propres utilisateurs.
 
-## 6. Authentification et rôles utilisateurs
+## 7. Authentification et rôles utilisateurs
 
 ![Rôles utilisateurs](docs/roles_utilisateurs.png)
 
@@ -210,19 +231,19 @@ Exemple de document :
 - **Mots de passe hors du code** : ils sont dans le fichier `.env`, exclu de GitHub par `.gitignore`. Le dépôt ne contient que `.env.example`.
 - **Hachage des mots de passe** : MongoDB ne stocke jamais un mot de passe en clair. Il conserve une empreinte **salée et hachée** avec le mécanisme **SCRAM-SHA-256**. Même un accès aux fichiers de la base ne révèle pas les mots de passe.
 
-## 7. Tests
+## 8. Tests
 
-18 tests automatisés avec `pytest`. Ils utilisent `mongomock`, une base MongoDB simulée en mémoire, et n'ont donc pas besoin d'un serveur.
+23 tests automatisés avec `pytest`. Ils utilisent `mongomock`, une base MongoDB simulée en mémoire, et n'ont donc pas besoin d'un serveur.
 
 | Fichier | Ce qui est vérifié |
 |---|---|
 | `test_transform.py` | colonnes obligatoires, migration fidèle (aucune valeur modifiée), anomalies signalées, dédoublonnage en option, structure et types des documents |
 | `test_integrity.py` | contrôles avant (valeur inconnue, valeur manquante, dates incohérentes) et après (document perdu, mauvais type) |
-| `test_migration.py` | migration complète, relance sans doublon, option de dédoublonnage, opérations CRUD, export complet |
+| `test_migration.py` | migration complète, relance sans doublon, **2e fichier ajouté sans écraser**, **interruption puis relance**, **mode remplacement (échec = ancienne version intacte)**, dédoublonnage, CRUD, export |
 
 En plus, **chaque migration réelle** exécute les contrôles avant et après sur les vraies données, et écrit le résultat dans `reports/rapport_migration.json`.
 
-## 8. Architecture Docker
+## 9. Architecture Docker
 
 ![Architecture Docker](docs/architecture_docker.png)
 
@@ -239,7 +260,7 @@ En plus, **chaque migration réelle** exécute les contrôles avant et après su
 
 **Le démon Docker** (`dockerd`) est le service qui crée et fait tourner les conteneurs ; la commande `docker` ne fait que lui envoyer des ordres. Ses limites : s'il s'arrête, tous les conteneurs s'arrêtent ; il tourne avec des droits élevés ; il gère une seule machine (pour plusieurs serveurs, il faut un orchestrateur, comme Amazon ECS).
 
-## 9. Choix techniques
+## 10. Choix techniques
 
 | Choix | Raison |
 |---|---|
@@ -251,6 +272,8 @@ En plus, **chaque migration réelle** exécute les contrôles avant et après su
 | **pandas** | lecture et contrôles du CSV en quelques lignes |
 | **pymongo** | pilote officiel de MongoDB pour Python |
 | **Insertion par lots** | plus rapide qu'un document à la fois, sans tout envoyer d'un coup |
+| **Identifiant stable + mode ajout** | une relance ou un nouveau fichier ne peut ni écraser ni doubler les données |
+| **Collection temporaire + renommage** | en mode remplacement, la base n'est jamais à moitié chargée |
 | **Docker Compose** | un seul fichier décrit et lance toute l'infrastructure |
 | **`depends_on` + `healthcheck`** | le script n'est lancé que lorsque MongoDB répond |
 

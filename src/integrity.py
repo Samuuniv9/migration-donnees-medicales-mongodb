@@ -72,10 +72,21 @@ def check_before(df: pd.DataFrame) -> dict:
     return report
 
 
-def check_after(collection, expected_count: int) -> dict:
-    """Vérifie la collection MongoDB après chargement."""
-    report = {"documents_attendus": expected_count}
-    report["documents_en_base"] = collection.count_documents({})
+def check_after(collection, expected_ids: list[str]) -> dict:
+    """
+    Vérifie la collection MongoDB après chargement.
+
+    On vérifie que CHAQUE document du fichier est bien en base (par son
+    identifiant), ce qui reste juste même si la base contient déjà des
+    données d'un chargement précédent.
+    """
+    report = {"documents_attendus": len(expected_ids)}
+    presents = 0
+    for start in range(0, len(expected_ids), 5000):
+        chunk = expected_ids[start:start + 5000]
+        presents += collection.count_documents({"_id": {"$in": chunk}})
+    report["documents_du_fichier_en_base"] = presents
+    report["documents_en_base_total"] = collection.count_documents({})
 
     # Champs manquants : aucun document ne doit en avoir.
     report["champs_manquants"] = {
@@ -95,7 +106,7 @@ def check_after(collection, expected_count: int) -> dict:
         name for name in collection.index_information() if name != "_id_"
     )
     report["ok"] = (
-        report["documents_en_base"] == expected_count
+        presents == len(expected_ids)
         and not report["champs_manquants"]
         and not report["types_incorrects"]
         and EXPECTED_INDEXES.issubset(report["index_presents"])
