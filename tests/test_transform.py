@@ -58,3 +58,12 @@ def test_identifiants_stables(raw_df):
     assert len(set(ids)) == 3                    # les 2 doublons ne sont pas fusionnés
     assert ids[0].endswith("-1") and ids[2].endswith("-2")
     assert ids[0].split("-")[0] == ids[2].split("-")[0]
+
+
+def test_identifiants_resistent_a_une_reecriture_du_fichier(csv_file, tmp_path):
+    """Le même fichier réexporté (autre écriture des nombres) garde les mêmes identifiants."""
+    df1, _ = prepare(load_csv(csv_file))
+    reecrit = tmp_path / "reecrit.csv"
+    load_csv(csv_file).to_csv(reecrit, index=False, float_format="%.10f")
+    df2, _ = prepare(load_csv(str(reecrit)))
+    assert stable_ids(df1) == stable_ids(df2)

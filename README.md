@@ -50,7 +50,7 @@ Le programme s'arrête et le signale si les données ne sont pas fiables (colonn
 │   ├── migrate.py              # script principal
 │   ├── crud_demo.py            # démonstration Create / Read / Update / Delete
 │   └── export_data.py          # export de toutes les données (JSON)
-├── tests/                      # 23 tests automatisés (pytest)
+├── tests/                      # 24 tests automatisés (pytest)
 ├── docs/                       # schémas (base, architecture, rôles, pipeline)
 ├── data/                       # y déposer le CSV (non versionné)
 └── reports/                    # le rapport de migration y est écrit
@@ -170,6 +170,8 @@ Le script **ne supprime jamais la collection avant de charger**. Il propose deux
 
 Pourquoi l'identifiant inclut un numéro d'occurrence : deux lignes strictement identiques du fichier (les 534 doublons) reçoivent `-1` et `-2`. Elles sont toutes les deux conservées, conformément à la migration fidèle.
 
+**Comment l'identifiant reste stable** : il est calculé sur des valeurs normalisées (montants au centime, dates AAAA-MM-JJ, textes sans espaces autour). Un même fichier réexporté donne donc les mêmes identifiants. **Limite** : si le client modifie une valeur, ou réduit la précision des montants, la ligne est vue comme nouvelle. La solution durable est un identifiant d'admission fourni par le client (voir les recommandations).
+
 Le compte `app_migration` (rôle `readWrite`) a les droits nécessaires : insérer, créer et renommer une collection dans sa base. Aucun droit supplémentaire n'est donné.
 
 Exemples :
@@ -233,11 +235,11 @@ Exemple de document :
 
 ## 8. Tests
 
-23 tests automatisés avec `pytest`. Ils utilisent `mongomock`, une base MongoDB simulée en mémoire, et n'ont donc pas besoin d'un serveur.
+24 tests automatisés avec `pytest`. Ils utilisent `mongomock`, une base MongoDB simulée en mémoire, et n'ont donc pas besoin d'un serveur.
 
 | Fichier | Ce qui est vérifié |
 |---|---|
-| `test_transform.py` | colonnes obligatoires, migration fidèle (aucune valeur modifiée), anomalies signalées, dédoublonnage en option, structure et types des documents |
+| `test_transform.py` | colonnes obligatoires, migration fidèle (aucune valeur modifiée), anomalies signalées, dédoublonnage en option, structure et types, **identifiants stables (y compris après réexport du fichier)** |
 | `test_integrity.py` | contrôles avant (valeur inconnue, valeur manquante, dates incohérentes) et après (document perdu, mauvais type) |
 | `test_migration.py` | migration complète, relance sans doublon, **2e fichier ajouté sans écraser**, **interruption puis relance**, **mode remplacement (échec = ancienne version intacte)**, dédoublonnage, CRUD, export |
 
