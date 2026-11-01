@@ -3,7 +3,7 @@
 import mongomock
 
 from src.integrity import check_after, check_before
-from src.migrate import load_documents, prepare_collection
+from src.migrate import load_documents, prepare_staging
 from src.transform import prepare, to_documents
 
 
@@ -32,27 +32,27 @@ def test_check_before_dates_incoherentes(raw_df):
 
 def _loaded_collection(raw_df):
     db = mongomock.MongoClient()["healthcare"]
-    collection = prepare_collection(db, "admissions", use_validator=False)
+    collection = prepare_staging(db, "admissions", use_validator=False)
     df, _ = prepare(raw_df)
     docs = to_documents(df)
     load_documents(collection, docs, batch_size=1)
-    return collection, len(docs)
+    return collection, [d["_id"] for d in docs]
 
 
 def test_check_after_ok(raw_df):
-    collection, n = _loaded_collection(raw_df)
-    report = check_after(collection, expected_count=n)
+    collection, ids = _loaded_collection(raw_df)
+    report = check_after(collection, ids)
     assert report["ok"] is True, report
 
 
 def test_check_after_document_perdu(raw_df):
-    collection, n = _loaded_collection(raw_df)
+    collection, ids = _loaded_collection(raw_df)
     collection.delete_one({})
-    assert check_after(collection, expected_count=n)["ok"] is False
+    assert check_after(collection, ids)["ok"] is False
 
 
 def test_check_after_mauvais_type(raw_df):
-    collection, n = _loaded_collection(raw_df)
+    collection, ids = _loaded_collection(raw_df)
     collection.update_one({}, {"$set": {"patient.age": "trente"}})
-    report = check_after(collection, expected_count=n)
+    report = check_after(collection, ids)
     assert report["types_incorrects"] == {"patient.age": 1}

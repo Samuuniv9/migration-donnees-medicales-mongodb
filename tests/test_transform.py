@@ -4,7 +4,7 @@ from datetime import datetime
 
 import pytest
 
-from src.transform import load_csv, prepare, to_documents
+from src.transform import load_csv, prepare, stable_ids, to_documents
 
 
 def test_load_csv_ok(csv_file):
@@ -43,8 +43,18 @@ def test_prepare_dedoublonnage_en_option(raw_df):
 def test_document_structure_et_types(raw_df):
     df, _ = prepare(raw_df)
     doc = to_documents(df)[0]
-    assert set(doc) == {"patient", "admission", "medical", "billing"}
+    assert set(doc) == {"_id", "patient", "admission", "medical", "billing"}
     assert isinstance(doc["patient"]["age"], int)
     assert isinstance(doc["admission"]["date_of_admission"], datetime)
     assert isinstance(doc["billing"]["amount"], float)
     assert doc["billing"]["amount"] == 18856.281305978155
+
+
+def test_identifiants_stables(raw_df):
+    """Même ligne = même identifiant ; deux doublons exacts gardent chacun le leur."""
+    df, _ = prepare(raw_df)
+    ids = stable_ids(df)
+    assert ids == stable_ids(df)                 # reproductible d'une exécution à l'autre
+    assert len(set(ids)) == 3                    # les 2 doublons ne sont pas fusionnés
+    assert ids[0].endswith("-1") and ids[2].endswith("-2")
+    assert ids[0].split("-")[0] == ids[2].split("-")[0]
